@@ -1,83 +1,41 @@
-/* Air Ink — vẽ trong không khí bằng ngón trỏ, theo dõi tay bằng MediaPipe Hands.
-   Toàn bộ chạy trên trình duyệt (client-side), không cần server. */
+/* Glitch Touch — hiệu ứng glitch bám theo đầu ngón tay, và glitch hình tam giác
+   khi đưa 2 tay lên gần mặt. Theo dõi tay bằng MediaPipe Hands, chạy hoàn toàn
+   trên trình duyệt (client-side), không cần server. */
 
 (() => {
-  const video        = document.getElementById('video');
-  const videoCanvas   = document.getElementById('videoCanvas');
-  const drawCanvas    = document.getElementById('drawCanvas');
-  const cursorCanvas  = document.getElementById('cursorCanvas');
+  const video      = document.getElementById('video');
+  const videoCanvas = document.getElementById('videoCanvas');
+  const fxCanvas    = document.getElementById('fxCanvas');
   const vCtx = videoCanvas.getContext('2d');
-  const dCtx = drawCanvas.getContext('2d');
-  const cCtx = cursorCanvas.getContext('2d');
+  const fCtx = fxCanvas.getContext('2d', { willReadFrequently: false });
 
   const startScreen = document.getElementById('startScreen');
-  const startBtn    = document.getElementById('startBtn');
-  const permErr      = document.getElementById('permErr');
-  const statusPill   = document.getElementById('statusPill');
-  const colorRail    = document.getElementById('colorRail');
-  const undoBtn      = document.getElementById('undoBtn');
-  const clearBtn     = document.getElementById('clearBtn');
-  const penBtn       = document.getElementById('penBtn');
-  const flipBtn      = document.getElementById('flipBtn');
+  const startBtn     = document.getElementById('startBtn');
+  const permErr       = document.getElementById('permErr');
+  const statusPill    = document.getElementById('statusPill');
+  const toneBtn       = document.getElementById('toneBtn');
+  const flipBtn        = document.getElementById('flipBtn');
 
-  const COLORS = [
-    { id: 'cyan',   value: '#5eead4' },
-    { id: 'violet', value: '#a78bfa' },
-    { id: 'pink',   value: '#f472b6' },
-    { id: 'amber',  value: '#fbbf24' },
-    { id: 'lime',   value: '#a3e635' },
-    { id: 'white',  value: '#f8fafc' },
-    { id: 'eraser', value: 'eraser' },
+  // ---------- pixelated source canvas (for chunky glitch blocks) ----------
+  const pixelCanvas = document.createElement('canvas');
+  const pCtx = pixelCanvas.getContext('2d');
+  const PIXEL_DIVISOR = 16; // higher = chunkier glitch blocks
+
+  // ---------- glitch tone presets ----------
+  const TONES = [
+    { name: 'Teal',    filter: (t) => `invert(1) hue-rotate(150deg) saturate(2.3) contrast(1.15)` },
+    { name: 'Violet',  filter: (t) => `invert(1) hue-rotate(265deg) saturate(2.4) contrast(1.1)` },
+    { name: 'Rainbow', filter: (t) => `hue-rotate(${(t / 6) % 360}deg) saturate(3.2) contrast(1.2)` },
   ];
+  let toneIndex = 0;
 
-  let currentColor = COLORS[0].value;
   let facingMode = 'user';
   let mirror = true;
-  let penEnabled = true;
-  let strokes = [];       // history of completed/ongoing strokes for undo
-  let activeStroke = null;
-  let lastPoint = null;
-  let handPresent = false;
-  let hoveredSwatchEl = null;
-
-  // ---------- build color rail ----------
-  const swatchEls = COLORS.map(c => {
-    const el = document.createElement('div');
-    el.className = 'swatch';
-    el.dataset.color = c.value;
-    if (c.id === 'eraser') {
-      el.textContent = '⌫';
-    } else {
-      el.style.background = c.value;
-    }
-    if (c.value === currentColor) el.classList.add('active');
-    colorRail.appendChild(el);
-    return el;
-  });
-
-  function selectColor(value) {
-    currentColor = value;
-    swatchEls.forEach(el => el.classList.toggle('active', el.dataset.color === value));
-  }
-  swatchEls.forEach(el => {
-    el.addEventListener('click', () => selectColor(el.dataset.color));
-  });
-
-  // ---------- canvas sizing ----------
-  function resizeCanvases() {
-    const w = window.innerWidth, h = window.innerHeight;
-    [videoCanvas, drawCanvas, cursorCanvas].forEach(c => {
-      // preserve drawing when resizing the draw canvas
-      c.width = w; c.height = h;
-    });
-    redrawStrokes();
-  }
-  window.addEventListener('resize', resizeCanvases);
+  let stream = null;
 
   // ---------- camera ----------
-  let stream = null;
   async function startCamera() {
-    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (stream) stream.getTracks().forEach((t) => t.stop());
     stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode, width: { ideal: 1280 }, height: { ideal: 1280 } }
@@ -87,26 +45,30 @@
     await video.play();
   }
 
+  // ---------- canvas sizing ----------
+  function resizeCanvases() {
+    const w = window.innerWidth, h = window.innerHeight;
+    videoCanvas.width = w; videoCanvas.height = h;
+    fxCanvas.width = w; fxCanvas.height = h;
+    pixelCanvas.width = Math.max(8, Math.round(w / PIXEL_DIVISOR));
+    pixelCanvas.height = Math.max(8, Math.round(h / PIXEL_DIVISOR));
+  }
+  window.addEventListener('resize', resizeCanvases);
+
   // ---------- MediaPipe Hands ----------
   const hands = new Hands({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
   });
   hands.setOptions({
-    maxNumHands: 1,
+    maxNumHands: 2,
     modelComplexity: 1,
     minDetectionConfidence: 0.7,
     minTrackingConfidence: 0.6
   });
 
-  let latestLandmarks = null;
+  let latestHands = []; // array of 21-landmark arrays
   hands.onResults((results) => {
-    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-      latestLandmarks = results.multiHandLandmarks[0];
-      handPresent = true;
-    } else {
-      latestLandmarks = null;
-      handPresent = false;
-    }
+    latestHands = results.multiHandLandmarks || [];
   });
 
   async function detectLoop() {
@@ -117,15 +79,15 @@
   }
 
   // ---------- coordinate mapping (object-fit: cover) ----------
-  function mapPoint(nx, ny) {
+  function mapPoint(lm) {
     const vw = video.videoWidth, vh = video.videoHeight;
     const cw = videoCanvas.width, ch = videoCanvas.height;
-    if (!vw || !vh) return null;
+    if (!vw || !vh) return { x: 0, y: 0 };
     const scale = Math.max(cw / vw, ch / vh);
     const drawW = vw * scale, drawH = vh * scale;
     const offsetX = (cw - drawW) / 2, offsetY = (ch - drawH) / 2;
-    let x = offsetX + nx * vw * scale;
-    const y = offsetY + ny * vh * scale;
+    let x = offsetX + lm.x * vw * scale;
+    const y = offsetY + lm.y * vh * scale;
     if (mirror) x = cw - x;
     return { x, y };
   }
@@ -144,127 +106,125 @@
     vCtx.restore();
   }
 
-  // ---------- stroke rendering ----------
-  function strokeStyleFor(color, ctx) {
-    if (color === 'eraser') {
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.strokeStyle = 'rgba(0,0,0,1)';
-      ctx.shadowBlur = 0;
-      ctx.lineWidth = 46;
-    } else {
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.strokeStyle = color;
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 16;
-      ctx.lineWidth = 7;
-    }
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+  function updatePixelSource() {
+    pCtx.imageSmoothingEnabled = true;
+    pCtx.drawImage(videoCanvas, 0, 0, pixelCanvas.width, pixelCanvas.height);
   }
 
-  function drawSegment(ctx, color, p0, p1) {
-    strokeStyleFor(color, ctx);
-    ctx.beginPath();
-    ctx.moveTo(p0.x, p0.y);
-    ctx.lineTo(p1.x, p1.y);
-    ctx.stroke();
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.shadowBlur = 0;
+  // ---------- glitch rendering ----------
+  function paintGlitchInClip(bboxX, bboxY, bboxW, bboxH, t) {
+    const cw = fxCanvas.width, ch = fxCanvas.height;
+    fCtx.save();
+    fCtx.clip();
+    fCtx.imageSmoothingEnabled = false;
+    fCtx.filter = TONES[toneIndex].filter(t);
+
+    // base pixelated layer, slight random shimmer offset
+    const jitter = () => (Math.random() - 0.5) * 10;
+    if (Math.random() > 0.08) { // occasional dropout flicker
+      fCtx.globalAlpha = 0.92;
+      fCtx.drawImage(pixelCanvas, 0, 0, cw, ch);
+    }
+
+    // chromatic-aberration-style extra passes
+    fCtx.globalCompositeOperation = 'lighter';
+    fCtx.globalAlpha = 0.55;
+    fCtx.drawImage(pixelCanvas, jitter(), jitter(), cw, ch);
+    fCtx.globalAlpha = 0.4;
+    fCtx.drawImage(pixelCanvas, jitter(), jitter(), cw, ch);
+
+    fCtx.globalCompositeOperation = 'source-over';
+    fCtx.filter = 'none';
+    fCtx.globalAlpha = 1;
+
+    // random noise scanlines within the bbox for flicker texture
+    const lines = 3 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < lines; i++) {
+      const ly = bboxY + Math.random() * bboxH;
+      const lh = 1 + Math.random() * 3;
+      fCtx.fillStyle = `rgba(255,255,255,${(Math.random() * 0.25).toFixed(2)})`;
+      fCtx.fillRect(bboxX, ly, bboxW, lh);
+    }
+
+    fCtx.restore();
   }
 
-  function redrawStrokes() {
-    dCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
-    for (const s of strokes) {
-      for (let i = 1; i < s.points.length; i++) {
-        drawSegment(dCtx, s.color, s.points[i - 1], s.points[i]);
-      }
-    }
+  function fingertipClipPath(p, size) {
+    fCtx.beginPath();
+    const w = size * 0.55, h = size * 1.3;
+    const r = w * 0.4;
+    const x = p.x - w / 2, y = p.y - h / 2;
+    fCtx.moveTo(x + r, y);
+    fCtx.arcTo(x + w, y, x + w, y + h, r);
+    fCtx.arcTo(x + w, y + h, x, y + h, r);
+    fCtx.arcTo(x, y + h, x, y, r);
+    fCtx.arcTo(x, y, x + w, y, r);
+    fCtx.closePath();
+    return { x: x - 4, y: y - 4, w: w + 8, h: h + 8 };
   }
 
-  // ---------- color rail hit-test ----------
-  function checkColorHover(px, py) {
-    let hit = null;
-    for (const el of swatchEls) {
-      const r = el.getBoundingClientRect();
-      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-      const dist = Math.hypot(px - cx, py - cy);
-      if (dist < r.width * 0.9) { hit = el; break; }
-    }
-    if (hoveredSwatchEl && hoveredSwatchEl !== hit) hoveredSwatchEl.classList.remove('hover');
-    if (hit) {
-      hit.classList.add('hover');
-      selectColor(hit.dataset.color);
-    }
-    hoveredSwatchEl = hit;
-    return !!hit;
+  function bowtieClipPath(leftTip, leftBase, rightTip, rightBase) {
+    const center = { x: (leftTip.x + rightTip.x) / 2, y: (leftTip.y + rightTip.y) / 2 };
+    fCtx.beginPath();
+    fCtx.moveTo(leftTip.x, leftTip.y);
+    fCtx.lineTo(leftBase.x, leftBase.y);
+    fCtx.lineTo(center.x, center.y);
+    fCtx.closePath();
+    fCtx.moveTo(rightTip.x, rightTip.y);
+    fCtx.lineTo(rightBase.x, rightBase.y);
+    fCtx.lineTo(center.x, center.y);
+    fCtx.closePath();
+    const xs = [leftTip.x, leftBase.x, rightTip.x, rightBase.x, center.x];
+    const ys = [leftTip.y, leftBase.y, rightTip.y, rightBase.y, center.y];
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
   }
 
   // ---------- main render loop ----------
-  function renderLoop() {
+  function renderLoop(t) {
     drawVideoFrame();
-    cCtx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
+    updatePixelSource();
+    fCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
 
-    if (handPresent && latestLandmarks) {
-      statusPill.textContent = penEnabled ? 'Đang vẽ' : 'Tạm dừng vẽ';
-      const tip = latestLandmarks[8];   // index fingertip
-      const p = mapPoint(tip.x, tip.y);
-
-      if (p) {
-        const overColor = checkColorHover(p.x, p.y);
-
-        // cursor dot
-        cCtx.beginPath();
-        cCtx.arc(p.x, p.y, 12, 0, Math.PI * 2);
-        cCtx.fillStyle = currentColor === 'eraser' ? 'rgba(255,255,255,0.5)' : currentColor;
-        cCtx.globalAlpha = 0.9;
-        cCtx.fill();
-        cCtx.globalAlpha = 1;
-
-        const shouldDraw = penEnabled && !overColor;
-        if (shouldDraw) {
-          if (!activeStroke) {
-            activeStroke = { color: currentColor, points: [p] };
-            strokes.push(activeStroke);
-            lastPoint = p;
-          } else {
-            drawSegment(dCtx, activeStroke.color, lastPoint, p);
-            activeStroke.points.push(p);
-            lastPoint = p;
-          }
-        } else {
-          activeStroke = null;
-          lastPoint = null;
-        }
-      }
-    } else {
+    const n = latestHands.length;
+    if (n === 0) {
       statusPill.textContent = 'Đang tìm bàn tay…';
-      activeStroke = null;
-      lastPoint = null;
-      if (hoveredSwatchEl) { hoveredSwatchEl.classList.remove('hover'); hoveredSwatchEl = null; }
+    } else if (n === 1) {
+      statusPill.textContent = 'Glitch đầu ngón tay';
+      const tip = mapPoint(latestHands[0][8]);
+      const pip = mapPoint(latestHands[0][6]);
+      const dist = Math.hypot(tip.x - pip.x, tip.y - pip.y) || 30;
+      const box = fingertipClipPath(tip, Math.max(34, dist * 1.6));
+      paintGlitchInClip(box.x, box.y, box.w, box.h, t);
+    } else {
+      statusPill.textContent = 'Glitch tam giác 2 tay';
+      // sort hands left-to-right by wrist x so the shape stays stable
+      const withPos = latestHands.slice(0, 2).map((lm) => ({
+        tip: mapPoint(lm[8]), base: mapPoint(lm[0])
+      }));
+      withPos.sort((a, b) => a.tip.x - b.tip.x);
+      const [L, R] = withPos;
+      const box = bowtieClipPath(L.tip, L.base, R.tip, R.base);
+      paintGlitchInClip(box.x, box.y, box.w, box.h, t);
+
+      // small fingertip glitch too, for extra life
+      const box2 = fingertipClipPath(L.tip, 30);
+      paintGlitchInClip(box2.x, box2.y, box2.w, box2.h, t);
+      const box3 = fingertipClipPath(R.tip, 30);
+      paintGlitchInClip(box3.x, box3.y, box3.w, box3.h, t);
     }
 
     requestAnimationFrame(renderLoop);
   }
 
   // ---------- controls ----------
-  undoBtn.addEventListener('click', () => {
-    strokes.pop();
-    activeStroke = null; lastPoint = null;
-    redrawStrokes();
-  });
-  clearBtn.addEventListener('click', () => {
-    strokes = []; activeStroke = null; lastPoint = null;
-    redrawStrokes();
-  });
-  penBtn.addEventListener('click', () => {
-    penEnabled = !penEnabled;
-    penBtn.textContent = penEnabled ? '✏️' : '⏸️';
-    penBtn.classList.toggle('off', !penEnabled);
-    activeStroke = null; lastPoint = null;
+  toneBtn.addEventListener('click', () => {
+    toneIndex = (toneIndex + 1) % TONES.length;
+    toneBtn.title = 'Tông màu: ' + TONES[toneIndex].name;
   });
   flipBtn.addEventListener('click', async () => {
     facingMode = facingMode === 'user' ? 'environment' : 'user';
-    activeStroke = null; lastPoint = null;
     try { await startCamera(); } catch (e) { console.error(e); }
   });
 
@@ -277,12 +237,12 @@
       resizeCanvases();
       startScreen.style.display = 'none';
       detectLoop();
-      renderLoop();
+      requestAnimationFrame(renderLoop);
     } catch (err) {
       console.error(err);
       permErr.style.display = 'block';
       startBtn.disabled = false;
-      startBtn.textContent = 'Bật camera & bắt đầu vẽ';
+      startBtn.textContent = 'Bật camera & bắt đầu';
     }
   });
 
