@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-<title>Air Ink — Vẽ bằng ngón tay</title>
+<title>Finger Glitch FX</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -14,6 +14,7 @@
     --line:rgba(255,255,255,0.14);
     --text:#f4f4f6;
     --dim:#9a9aa5;
+    --accent:#2dd4bf;
   }
   *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; }
   html,body{
@@ -26,10 +27,8 @@
   video{ display:none; }
   canvas{ position:absolute; top:0; left:0; width:100%; height:100%; display:block; }
   #videoCanvas{ z-index:1; }
-  #drawCanvas{ z-index:2; }
-  #cursorCanvas{ z-index:3; }
+  #fxCanvas{ z-index:2; }
 
-  /* ---- Top bar ---- */
   #topBar{
     position:absolute; top:0; left:0; right:0; z-index:5;
     padding:calc(14px + env(safe-area-inset-top)) 16px 10px;
@@ -38,37 +37,21 @@
     pointer-events:none;
   }
   #wordmark{
-    font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:15px;
-    letter-spacing:0.5px;
+    font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:15px; letter-spacing:0.5px;
   }
-  #wordmark span{ color:#5eead4; }
+  #wordmark span{ color:var(--accent); }
   #statusPill{
     font-size:11px; color:var(--dim); border:1px solid var(--line);
     padding:5px 10px; border-radius:999px; background:var(--panel);
     backdrop-filter:blur(8px);
   }
 
-  /* ---- Color rail (right edge) ---- */
-  #colorRail{
-    position:absolute; right:12px; top:50%; transform:translateY(-50%);
-    z-index:5; display:flex; flex-direction:column; gap:12px;
-    padding:10px 8px; border-radius:22px;
-    background:var(--panel); border:1px solid var(--line); backdrop-filter:blur(10px);
-  }
-  .swatch{
-    width:34px; height:34px; border-radius:50%;
-    border:2px solid rgba(255,255,255,0.35);
-    transform:scale(1); transition:transform 0.12s ease, border-color 0.12s ease;
-    position:relative;
-  }
-  .swatch.active{ transform:scale(1.28); border-color:#fff; }
-  .swatch.hover{ transform:scale(1.15); }
-  .swatch[data-color="eraser"]{
-    background:repeating-conic-gradient(#2a2a33 0% 25%, #3a3a45 0% 50%) 0 0/10px 10px;
-    display:flex; align-items:center; justify-content:center; font-size:14px;
+  #hint{
+    position:absolute; left:0; right:0; bottom:calc(84px + env(safe-area-inset-bottom));
+    text-align:center; z-index:5; font-size:11.5px; color:var(--dim);
+    pointer-events:none; text-shadow:0 1px 6px rgba(0,0,0,0.7);
   }
 
-  /* ---- Bottom controls ---- */
   #bottomBar{
     position:absolute; left:0; right:0; bottom:calc(18px + env(safe-area-inset-bottom));
     z-index:5; display:flex; justify-content:center; align-items:center; gap:14px;
@@ -78,40 +61,28 @@
     background:var(--panel); border:1px solid var(--line); backdrop-filter:blur(10px);
     color:var(--text); font-size:20px; display:flex; align-items:center; justify-content:center;
   }
-  .ctrlBtn.primary{
-    width:64px; height:64px; font-size:24px;
-    background:linear-gradient(135deg,#5eead4,#a78bfa);
-    color:#07070c; border:none;
-  }
-  .ctrlBtn.off{ opacity:0.45; }
+  .ctrlBtn.active{ border-color:var(--accent); color:var(--accent); }
 
-  #hint{
-    position:absolute; left:0; right:0; bottom:calc(84px + env(safe-area-inset-bottom));
-    text-align:center; z-index:5; font-size:11.5px; color:var(--dim);
-    pointer-events:none; text-shadow:0 1px 6px rgba(0,0,0,0.7);
-  }
-
-  /* ---- Start screen ---- */
   #startScreen{
     position:absolute; inset:0; z-index:20;
     display:flex; flex-direction:column; align-items:center; justify-content:center;
     background:
-      radial-gradient(circle at 30% 20%, rgba(94,234,212,0.14), transparent 55%),
-      radial-gradient(circle at 75% 75%, rgba(167,139,250,0.14), transparent 55%),
+      radial-gradient(circle at 30% 20%, rgba(45,212,191,0.16), transparent 55%),
+      radial-gradient(circle at 75% 75%, rgba(168,85,247,0.16), transparent 55%),
       var(--bg);
     text-align:center; padding:32px;
   }
   #startScreen h1{
     font-family:'Space Grotesk',sans-serif; font-weight:700;
-    font-size:30px; margin:0 0 10px; letter-spacing:0.2px;
+    font-size:28px; margin:0 0 10px; letter-spacing:0.2px;
   }
-  #startScreen h1 span{ color:#5eead4; }
+  #startScreen h1 span{ color:var(--accent); }
   #startScreen p{ font-size:14px; color:var(--dim); max-width:290px; line-height:1.6; margin:0 0 30px; }
   #startBtn{
     padding:15px 38px; border-radius:999px; border:none;
-    background:linear-gradient(135deg,#5eead4,#a78bfa);
+    background:linear-gradient(135deg,var(--accent),#a855f7);
     color:#07070c; font-weight:600; font-size:15px;
-    box-shadow:0 10px 34px rgba(94,234,212,0.25);
+    box-shadow:0 10px 34px rgba(45,212,191,0.25);
   }
   #permErr{ margin-top:16px; font-size:12px; color:#fb7185; max-width:280px; display:none; }
 </style>
@@ -120,29 +91,24 @@
 <div id="stage">
   <video id="video" playsinline autoplay muted></video>
   <canvas id="videoCanvas"></canvas>
-  <canvas id="drawCanvas"></canvas>
-  <canvas id="cursorCanvas"></canvas>
+  <canvas id="fxCanvas"></canvas>
 
   <div id="topBar">
-    <div id="wordmark">AIR<span>INK</span></div>
+    <div id="wordmark">GLITCH<span>TOUCH</span></div>
     <div id="statusPill">Đang tìm bàn tay…</div>
   </div>
 
-  <div id="hint">Chỉ 1 ngón trỏ để vẽ · chạm ô màu bên phải để đổi màu</div>
-
-  <div id="colorRail"></div>
+  <div id="hint">1 ngón tay = glitch đầu ngón · 2 tay đưa lên mặt = glitch tam giác</div>
 
   <div id="bottomBar">
-    <button class="ctrlBtn" id="undoBtn" title="Hoàn tác">↩︎</button>
-    <button class="ctrlBtn" id="clearBtn" title="Xóa hết">🗑️</button>
-    <button class="ctrlBtn primary" id="penBtn" title="Bật/tắt vẽ">✏️</button>
+    <button class="ctrlBtn active" id="toneBtn" title="Đổi tông màu glitch">🎨</button>
     <button class="ctrlBtn" id="flipBtn" title="Đổi camera">🔄</button>
   </div>
 
   <div id="startScreen">
-    <h1>AIR<span>INK</span></h1>
-    <p>Vẽ trong không khí bằng đầu ngón trỏ — camera theo dõi tay bạn theo thời gian thực, ngay trên trình duyệt.</p>
-    <button id="startBtn">Bật camera &amp; bắt đầu vẽ</button>
+    <h1>GLITCH<span>TOUCH</span></h1>
+    <p>Hiệu ứng glitch bám theo ngón tay và khuôn mặt theo thời gian thực — camera theo dõi tay bạn ngay trên trình duyệt, không cần cài app.</p>
+    <button id="startBtn">Bật camera &amp; bắt đầu</button>
     <div id="permErr">Không thể truy cập camera. Hãy cho phép quyền camera và tải lại trang.</div>
   </div>
 </div>
